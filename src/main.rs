@@ -1,5 +1,6 @@
 
+mod network;
 
 fn main() {
-    println!("Hello, world!");
+    network::hey();
 }
