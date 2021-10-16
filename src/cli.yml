@@ -15,6 +15,11 @@ args:
         help: UDP port which datagrams will be redirected to.
         takes_value: true
         default_value: "8081"
+    - lag:
+        long: lag
+        help: Amount of lag in ms introduced by the network. This increases RTT on 2lag on average.
+        takes_value: true
+        default_value: "13"
 subcommands:
     - test:
         about: controls testing features

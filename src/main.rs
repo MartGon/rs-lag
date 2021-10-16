@@ -3,17 +3,23 @@
 extern crate clap;
 use clap::App;
 
+use std::mem::swap;
 use std::net::{ToSocketAddrs, UdpSocket};
+use std::collections::BTreeMap;
 
 mod network;
 use crate::network::Packet;
 
 // TODO: Uses threads for sending/recv
 
-fn now_millis() -> u128{
+fn now_nanos() -> u128{
     let time = std::time::SystemTime::now();
     let now = time.duration_since(std::time::UNIX_EPOCH).expect("Time is wrong");
-    now.as_millis()
+    now.as_nanos()
+}
+
+fn millis_to_nanos(millis : u128) -> u128{
+    millis * 1_000_000
 }
 
 fn main() {
@@ -26,11 +32,14 @@ fn main() {
 
     let connect_port = matches.value_of("connect-port").unwrap();
     let connect_port = connect_port.parse::<u16>().unwrap();
+
+    let lag = matches.value_of("lag").unwrap();
+    let lag = lag.parse::<u128>().unwrap();
     
     println!("The listen port is {}", listen_port);
     println!("Datagrams will be redirected to port {}", connect_port);
 
-    let mut packet_queue : Vec<Packet> = Vec::new();
+    let mut packet_queue : BTreeMap<u128, Packet> = BTreeMap::new();
 
     let server_address = ToSocketAddrs::to_socket_addrs(&format!("127.0.0.1:{}", connect_port)[..]).expect("Invalid connection port").next().unwrap();
     let socket = UdpSocket::bind(format!("0.0.0.0:{}", listen_port)).expect(&format!("Could not bind to UDP port {}", listen_port)[..]);
@@ -55,26 +64,21 @@ fn main() {
             let dest = if from_server {client_src} else {server_address};
             println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
 
-            let now = now_millis();
-            const NETWORK_DELAY: u128 = 100;
-            let sent_date = now + NETWORK_DELAY;
+            let now = now_nanos();
+            let network_delay: u128 = millis_to_nanos(lag);
+            let sent_date = now + network_delay;
             println!("Date to send {}", sent_date);
 
             let packet = Packet::new(buffer, dest, sent_date);
 
-            packet_queue.push(packet);
+            packet_queue.insert(sent_date, packet);
         }
         
-        packet_queue.sort();
-        let now = now_millis();
-        while let Some(packet) = packet_queue.last()
+        let now = now_nanos();
+        let mut to_send = packet_queue.split_off(&now);
+        swap(&mut to_send, &mut packet_queue);
+        for (_, packet) in to_send
         {
-            if packet.sent_date > now
-            {
-                break;
-            }
-            let packet = packet_queue.pop().unwrap();
-
             println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), 0);
             socket.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
