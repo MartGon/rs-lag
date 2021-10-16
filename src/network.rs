@@ -1,5 +1,5 @@
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr};
 
 pub struct Packet{
     pub buffer: Vec<u8>,
