@@ -3,27 +3,12 @@
 extern crate clap;
 use clap::App;
 
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::ops::Index;
+use std::net::{ToSocketAddrs, UdpSocket};
 
-struct Packet{
-    buffer: Vec<u8>,
-    dest: SocketAddr,
-    sent_date : u128,
-    sent : bool
-}
-impl Packet
-{
-    fn new(buffer : Vec<u8>, dest : SocketAddr, sent_date : u128) -> Packet{
-        Packet{
-            buffer, dest, sent_date, sent : false
-        }
-    }
+mod network;
+use crate::network::Packet;
 
-    fn size(&self) -> usize{
-        self.buffer.len()
-    }
-}
+// TODO: Uses threads for sending/recv
 
 fn now_millis() -> u128{
     let time = std::time::SystemTime::now();
@@ -71,7 +56,7 @@ fn main() {
             println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
 
             let now = now_millis();
-            const NETWORK_DELAY: u128 = 50;
+            const NETWORK_DELAY: u128 = 100;
             let sent_date = now + NETWORK_DELAY;
             println!("Date to send {}", sent_date);
 
@@ -80,18 +65,18 @@ fn main() {
             packet_queue.push(packet);
         }
         
+        packet_queue.sort();
         let now = now_millis();
-        for packet in packet_queue.iter_mut()
+        while let Some(packet) = packet_queue.last()
         {
-            let date = packet.sent_date;
-            if date <  now && !packet.sent
+            if packet.sent_date > now
             {
-                let delay = now - date;
-                println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), delay);
-                socket.send_to(&packet.buffer, packet.dest).expect("Error while sending");
-                packet.sent = true;
+                break;
             }
+            let packet = packet_queue.pop().unwrap();
+
+            println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), 0);
+            socket.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
-        
     }
 }
