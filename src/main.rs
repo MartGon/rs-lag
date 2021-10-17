@@ -7,7 +7,7 @@ use rand::prelude::{Distribution, ThreadRng};
 use std::mem::swap;
 use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, Arc};
+use std::sync::{Arc, Condvar, Mutex};
 
 use rand::distributions::{Uniform};
 use std::convert::TryFrom;
@@ -77,8 +77,8 @@ fn main() {
     println!("Packet Unorder chance: {}", unorder_chance);
 
     // Setup
-    let packet_queue_recv = Arc::new(Mutex::new(BTreeMap::<u128, Packet>::new()));
-    let packet_queue_send = packet_queue_recv.clone();
+    let packet_queue_recv = Arc::new((Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new()));
+    let packet_queue_send = Arc::clone(&packet_queue_recv);
 
     let server_address = ToSocketAddrs::to_socket_addrs(&format!("127.0.0.1:{}", connect_port)[..]).expect("Invalid connection port").next().unwrap();
     let socket_recv = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", listen_port)).expect(&format!("Could not bind to UDP port {}", listen_port)[..]));
@@ -105,6 +105,7 @@ fn main() {
 
             if let Ok((size, src)) = res
             {
+                buffer.truncate(size);
                 let from_server = src.port() == connect_port;
                 let dest = if from_server {client_src} else {server_address};
                 let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
@@ -115,7 +116,10 @@ fn main() {
                 {
                     let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
                     let duplicate = Packet::new(buffer.clone(), dest, sent_date);
-                    packet_queue_recv.lock().unwrap().insert(sent_date, duplicate);
+                    let (q, cvar) = &*packet_queue_recv;
+                    let mut q = q.lock().unwrap();
+                    q.insert(sent_date, duplicate);
+                    cvar.notify_one();
                 }
 
                 let packet = Packet::new(buffer, dest, sent_date);
@@ -130,13 +134,18 @@ fn main() {
                 {
                     //println!("Packet queued after the next");
                     let sent_date = packet.sent_date + gen_delay(lag, jitter_dist, &mut rng);
-                    let mut packet_queue = packet_queue_recv.lock().unwrap();
-                    packet_queue.insert(packet.sent_date, prev_packet);
-                    packet_queue.insert(sent_date, packet);
+                    let (q, cvar) = &*packet_queue_recv;
+                    let mut q = q.lock().unwrap();
+                    q.insert(packet.sent_date, prev_packet);
+                    q.insert(sent_date, packet);
+                    cvar.notify_one();
                 }
                 else
                 {
-                    packet_queue_recv.lock().unwrap().insert(sent_date, packet);
+                    let (q, cvar) = &*packet_queue_recv;
+                    let mut q = q.lock().unwrap();
+                    q.insert(sent_date, packet);
+                    cvar.notify_one();
                 }
             }
         }
@@ -145,16 +154,17 @@ fn main() {
     loop
     {
         let now = now_nanos();
-        let mut packet_queue_guard = packet_queue_send.lock().unwrap();
-        let mut to_send = packet_queue_guard.split_off(&now);
-        swap(&mut to_send, &mut packet_queue_guard);
-        drop(packet_queue_guard);
+
+        let (q, cvar) = &*packet_queue_send;
+        let queue_guard = q.lock().unwrap();
+        let (mut queue_guard, _) = cvar.wait_timeout(queue_guard, std::time::Duration::from_micros(10)).unwrap();
+
+        let mut to_send = queue_guard.split_off(&now);
+        swap(&mut to_send, &mut queue_guard);
         for (_, packet) in to_send
         {
-            println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), 0);
+            println!("Packet sent to {} of size {}", packet.dest, packet.size());
             socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
-
-        std::thread::sleep(std::time::Duration::from_nanos(100));
     }
 }
