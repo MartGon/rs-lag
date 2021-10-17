@@ -145,13 +145,16 @@ fn main() {
     loop
     {
         let now = now_nanos();
-        let mut packet_queue = packet_queue_send.lock().unwrap();
-        let mut to_send = packet_queue.split_off(&now);
-        swap(&mut to_send, &mut packet_queue);
+        let mut packet_queue_guard = packet_queue_send.lock().unwrap();
+        let mut to_send = packet_queue_guard.split_off(&now);
+        swap(&mut to_send, &mut packet_queue_guard);
+        drop(packet_queue_guard);
         for (_, packet) in to_send
         {
             println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), 0);
             socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
+
+        std::thread::sleep(std::time::Duration::from_nanos(100));
     }
 }
