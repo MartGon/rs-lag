@@ -81,7 +81,7 @@ fn main() {
     let packet_queue_send = packet_queue_recv.clone();
 
     let server_address = ToSocketAddrs::to_socket_addrs(&format!("127.0.0.1:{}", connect_port)[..]).expect("Invalid connection port").next().unwrap();
-    let socket_recv = Arc::new(Mutex::new(UdpSocket::bind(format!("0.0.0.0:{}", listen_port)).expect(&format!("Could not bind to UDP port {}", listen_port)[..])));
+    let socket_recv = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", listen_port)).expect(&format!("Could not bind to UDP port {}", listen_port)[..]));
     let socket_send = socket_recv.clone();
 
     let jitter_dist = Uniform::<i128>::from(-jitter..(jitter + 1));
@@ -90,12 +90,9 @@ fn main() {
     
     // Get client address from first packet. Wait for it
     let mut buf = [0; 255];
-    let (_, client_src) = socket_recv.lock().unwrap().peek_from(&mut buf).expect("Error while peeking on socket");
+    let (_, client_src) = socket_recv.peek_from(&mut buf).expect("Error while peeking on socket");
     println!("Client connected from {}", client_src);    
 
-    // No longer block for packets
-    socket_recv.lock().unwrap().set_nonblocking(true).expect("Failed to set non blocking");
-    
     let _listen_handle = std::thread::spawn(move ||
     {
         let mut rng = rand::thread_rng();
@@ -104,9 +101,7 @@ fn main() {
         {
             // Recv packets
             let mut buffer : Vec<u8> = vec![0; 255];
-            let socket_guard = socket_recv.lock().unwrap();
-            let res = socket_guard.recv_from(&mut buffer);
-            drop(socket_guard);
+            let res = socket_recv.recv_from(&mut buffer);
 
             if let Ok((size, src)) = res
             {
@@ -156,7 +151,7 @@ fn main() {
         for (_, packet) in to_send
         {
             println!("Packet sent to {} of size {} with delay: {} ms", packet.dest, packet.size(), 0);
-            socket_send.lock().unwrap().send_to(&packet.buffer, packet.dest).expect("Error while sending");
+            socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
     }
 }
