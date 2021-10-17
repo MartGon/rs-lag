@@ -76,6 +76,10 @@ fn main() {
     let unorder_chance : f32 = unorder_chance.parse::<f32>().unwrap().min(100f32).max(0f32);
     println!("Packet Unorder chance: {}", unorder_chance);
 
+    let loss_chance = matches.value_of("loss").unwrap();
+    let loss_chance : f32 = loss_chance.parse::<f32>().unwrap().min(100f32).max(0f32);
+    println!("Packet Loss chance: {}", loss_chance);
+
     // Setup
     let packet_queue_recv = Arc::new((Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new()));
     let packet_queue_send = Arc::clone(&packet_queue_recv);
@@ -85,8 +89,7 @@ fn main() {
     let socket_send = socket_recv.clone();
 
     let jitter_dist = Uniform::<i128>::from(-jitter..(jitter + 1));
-    let duplication_dist = Uniform::<f32>::from(0f32..100f32);
-    let unorder_dist = Uniform::<f32>::from(0f32..100f32);
+    let roll_dist = Uniform::<f32>::from(0f32..100f32);
     
     // Get client address from first packet. Wait for it
     let mut buf = [0; 255];
@@ -109,43 +112,50 @@ fn main() {
                 let from_server = src.port() == connect_port;
                 let dest = if from_server {client_src} else {server_address};
                 let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
-                println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
+                //println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
 
-                let roll = duplication_dist.sample(&mut rng);
-                if roll < duplication_chance
+                let roll = roll_dist.sample(&mut rng);
+                let arrived = roll > loss_chance;
+                if arrived
                 {
-                    let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
-                    let duplicate = Packet::new(buffer.clone(), dest, sent_date);
-                    let (q, cvar) = &*packet_queue_recv;
-                    let mut q = q.lock().unwrap();
-                    q.insert(sent_date, duplicate);
-                    cvar.notify_one();
-                }
+                    let roll = roll_dist.sample(&mut rng);
+                    let duplicated = roll < duplication_chance;
+                    if duplicated
+                    {
+                        let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
+                        let duplicate = Packet::new(buffer.clone(), dest, sent_date);
+                        let (q, cvar) = &*packet_queue_recv;
+                        let mut q = q.lock().unwrap();
+                        q.insert(sent_date, duplicate);
+                        cvar.notify_one();
+                    }
 
-                let packet = Packet::new(buffer, dest, sent_date);
+                    let packet = Packet::new(buffer, dest, sent_date);
 
-                let roll = unorder_dist.sample(&mut rng);
-                if roll < unorder_chance && !unordered_packets.contains_key(&packet.dest)
-                {
-                    //println!("Packet is gonna arrive after the next");
-                    unordered_packets.insert(packet.dest, packet);
-                }
-                else if let Some((_, prev_packet)) = unordered_packets.remove_entry(&packet.dest)
-                {
-                    //println!("Packet queued after the next");
-                    let sent_date = packet.sent_date + gen_delay(lag, jitter_dist, &mut rng);
-                    let (q, cvar) = &*packet_queue_recv;
-                    let mut q = q.lock().unwrap();
-                    q.insert(packet.sent_date, prev_packet);
-                    q.insert(sent_date, packet);
-                    cvar.notify_one();
-                }
-                else
-                {
-                    let (q, cvar) = &*packet_queue_recv;
-                    let mut q = q.lock().unwrap();
-                    q.insert(sent_date, packet);
-                    cvar.notify_one();
+                    let roll = roll_dist.sample(&mut rng);
+                    let unordered = roll < unorder_chance;
+                    if unordered && !unordered_packets.contains_key(&packet.dest)
+                    {
+                        //println!("Packet is gonna arrive after the next");
+                        unordered_packets.insert(packet.dest, packet);
+                    }
+                    else if let Some((_, prev_packet)) = unordered_packets.remove_entry(&packet.dest)
+                    {
+                        //println!("Packet queued after the next");
+                        let sent_date = packet.sent_date + gen_delay(lag, jitter_dist, &mut rng);
+                        let (q, cvar) = &*packet_queue_recv;
+                        let mut q = q.lock().unwrap();
+                        q.insert(packet.sent_date, prev_packet);
+                        q.insert(sent_date, packet);
+                        cvar.notify_one();
+                    }
+                    else
+                    {
+                        let (q, cvar) = &*packet_queue_recv;
+                        let mut q = q.lock().unwrap();
+                        q.insert(sent_date, packet);
+                        cvar.notify_one();
+                    }
                 }
             }
         }
@@ -163,7 +173,7 @@ fn main() {
         swap(&mut to_send, &mut queue_guard);
         for (_, packet) in to_send
         {
-            println!("Packet sent to {} of size {}", packet.dest, packet.size());
+            //println!("Packet sent to {} of size {}", packet.dest, packet.size());
             socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
     }
