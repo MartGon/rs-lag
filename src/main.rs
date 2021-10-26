@@ -13,7 +13,10 @@ use rand::distributions::{Uniform};
 use std::convert::TryFrom;
 
 mod network;
+mod proxy;
+mod conditions;
 use crate::network::Packet;
+use crate::proxy::Proxy;
 
 fn now_nanos() -> u128{
     let time = std::time::SystemTime::now();
@@ -80,21 +83,19 @@ fn main() {
     let loss_chance : f32 = loss_chance.parse::<f32>().unwrap().min(100f32).max(0f32);
     println!("Packet Loss chance: {}", loss_chance);
 
+    // RNG
+    let jitter_dist = Uniform::<i128>::from(-jitter..(jitter + 1));
+    let roll_dist = Uniform::<f32>::from(0f32..100f32);  
+
     // Setup
     let packet_queue_recv = Arc::new((Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new()));
     let packet_queue_send = Arc::clone(&packet_queue_recv);
 
     let server_address = ToSocketAddrs::to_socket_addrs(&format!("127.0.0.1:{}", connect_port)[..]).expect("Invalid connection port").next().unwrap();
-    let socket_recv = Arc::new(UdpSocket::bind(format!("0.0.0.0:{}", listen_port)).expect(&format!("Could not bind to UDP port {}", listen_port)[..]));
-    let socket_send = socket_recv.clone();
+    let proxy_address = format!("0.0.0.0:{}", listen_port);
 
-    let jitter_dist = Uniform::<i128>::from(-jitter..(jitter + 1));
-    let roll_dist = Uniform::<f32>::from(0f32..100f32);
-    
-    // Get client address from first packet. Wait for it
-    let mut buf = [0; 255];
-    let (_, client_src) = socket_recv.peek_from(&mut buf).expect("Error while peeking on socket");
-    println!("Client connected from {}", client_src);    
+    let socket_recv = Arc::new(UdpSocket::bind(proxy_address).expect(&format!("Could not bind to UDP port {}", listen_port)[..]));
+    let sending_sockets = Arc::new(Mutex::new(HashMap::<SocketAddr, UdpSocket>::new()));
 
     let _listen_handle = std::thread::spawn(move ||
     {
@@ -109,7 +110,19 @@ fn main() {
             if let Ok((size, src)) = res
             {
                 buffer.truncate(size);
-                let from_server = src.port() == connect_port;
+                let from_server = src == server_address;
+                if !from_server
+                {
+                    let mut guard = sending_sockets.lock().expect("Error on locking sending sockets");
+                    if !guard.contains_key(&src)
+                    {
+                        let port = listen_port + guard.len() as u16 + 1;
+                        let address = format!("0.0.0.0:{}", port);
+                        let socket_send = UdpSocket::bind(&address).expect(&format!("Could not bind to dynamic address {}", address));
+                        guard.insert(src, socket_send);
+                    }
+                }
+
                 let dest = if from_server {client_src} else {server_address};
                 let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
                 //println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
@@ -174,6 +187,8 @@ fn main() {
         for (_, packet) in to_send
         {
             //println!("Packet sent to {} of size {}", packet.dest, packet.size());
+            let guard = sending_sockets.lock().expect("Error on locking sending sockets");
+            let socket_send = guard.get(&packet.dest).expect(&format!("Did not find a key for {}", packet.dest));
             socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
         }
     }

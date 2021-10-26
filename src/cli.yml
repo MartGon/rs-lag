@@ -31,17 +31,17 @@ args:
         short: d
         long: duplication
         help: Chance to duplicate a packet. A float value from 0 to 100
-        default_value: "0.5"
+        default_value: "0"
     - unorder:
         short: u
         long: unorder
         help: Chance for a given packet to arrive after the next. A float value from 0 to 100
-        default_value: "0.5"
+        default_value: "0"
     - loss:
         short: m
         long: loss
         help: Chance for a packet to be lost. A float value from 0 to 100
-        default_value: "1"
+        default_value: "0"
 
 subcommands:
     - test:

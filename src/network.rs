@@ -14,10 +14,6 @@ impl Packet
             buffer, dest, sent_date
         }
     }
-
-    pub fn size(&self) -> usize{
-        self.buffer.len()
-    }
 }
 
 impl PartialEq for Packet
