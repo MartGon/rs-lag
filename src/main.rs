@@ -2,52 +2,15 @@
 #[macro_use]
 extern crate clap;
 use clap::App;
-use rand::prelude::{Distribution, ThreadRng};
 
-use std::mem::swap;
-use std::net::{SocketAddr, ToSocketAddrs, UdpSocket};
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Condvar, Mutex};
 
-use rand::distributions::{Uniform};
-use std::convert::TryFrom;
+use std::net::{ToSocketAddrs};
 
 mod network;
 mod proxy;
 mod conditions;
 use crate::conditions::Conditions;
-use crate::network::Packet;
 use crate::proxy::Proxy;
-
-fn now_nanos() -> u128{
-    let time = std::time::SystemTime::now();
-    let now = time.duration_since(std::time::UNIX_EPOCH).expect("Time is wrong");
-    now.as_nanos()
-}
-
-fn millis_to_nanos(millis : u128) -> u128{
-    millis * 1_000_000
-}
-
-fn i128_millis_to_nanos(millis : i128) -> i128
-{
-    millis * 1_000_000
-}
-
-fn gen_sent_date(lag: u128, dist : Uniform::<i128>, rng : &mut ThreadRng) -> u128
-{
-    let now = now_nanos();
-    let sent_date = now + gen_delay(lag, dist, rng);
-    return sent_date;
-}
-
-fn gen_delay(lag: u128, dist : Uniform::<i128>, rng : &mut ThreadRng) -> u128
-{
-    let network_delay: u128 = millis_to_nanos(lag);
-    let jitter = i128_millis_to_nanos(dist.sample(rng));
-    let delay = u128::try_from(std::cmp::max(network_delay as i128 + jitter, 0)).expect("Conversion error");
-    return delay;
-}
 
 fn main() {
 
@@ -92,6 +55,6 @@ fn main() {
     let server_addr = format!("127.0.0.1:{}", connect_port);
     let server_addr = ToSocketAddrs::to_socket_addrs(&server_addr).expect("Could not convert addr").next().unwrap();
     
-    let proxy = Proxy::new(proxy_addr, server_addr, conditions);
+    let mut proxy = Proxy::new(proxy_addr, server_addr, conditions);
     proxy.run();
 }
