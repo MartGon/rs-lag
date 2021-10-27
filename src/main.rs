@@ -15,6 +15,7 @@ use std::convert::TryFrom;
 mod network;
 mod proxy;
 mod conditions;
+use crate::conditions::Conditions;
 use crate::network::Packet;
 use crate::proxy::Proxy;
 
@@ -83,113 +84,14 @@ fn main() {
     let loss_chance : f32 = loss_chance.parse::<f32>().unwrap().min(100f32).max(0f32);
     println!("Packet Loss chance: {}", loss_chance);
 
-    // RNG
-    let jitter_dist = Uniform::<i128>::from(-jitter..(jitter + 1));
-    let roll_dist = Uniform::<f32>::from(0f32..100f32);  
+    // Initializing proxy
+    let conditions = Conditions::new(lag, jitter, duplication_chance, unorder_chance, loss_chance);
 
-    // Setup
-    let packet_queue_recv = Arc::new((Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new()));
-    let packet_queue_send = Arc::clone(&packet_queue_recv);
-
-    let server_address = ToSocketAddrs::to_socket_addrs(&format!("127.0.0.1:{}", connect_port)[..]).expect("Invalid connection port").next().unwrap();
-    let proxy_address = format!("0.0.0.0:{}", listen_port);
-
-    let socket_recv = Arc::new(UdpSocket::bind(proxy_address).expect(&format!("Could not bind to UDP port {}", listen_port)[..]));
-    let sending_sockets = Arc::new(Mutex::new(HashMap::<SocketAddr, UdpSocket>::new()));
-
-    let _listen_handle = std::thread::spawn(move ||
-    {
-        let mut rng = rand::thread_rng();
-        let mut unordered_packets = HashMap::<SocketAddr, Packet>::new();
-        loop
-        {
-            // Recv packets
-            let mut buffer : Vec<u8> = vec![0; 255];
-            let res = socket_recv.recv_from(&mut buffer);
-
-            if let Ok((size, src)) = res
-            {
-                buffer.truncate(size);
-                let from_server = src == server_address;
-                if !from_server
-                {
-                    let mut guard = sending_sockets.lock().expect("Error on locking sending sockets");
-                    if !guard.contains_key(&src)
-                    {
-                        let port = listen_port + guard.len() as u16 + 1;
-                        let address = format!("0.0.0.0:{}", port);
-                        let socket_send = UdpSocket::bind(&address).expect(&format!("Could not bind to dynamic address {}", address));
-                        guard.insert(src, socket_send);
-                    }
-                }
-
-                let dest = if from_server {client_src} else {server_address};
-                let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
-                //println!("Packet recv from {} of size {} to be sent to {}", src, size, dest);
-
-                let roll = roll_dist.sample(&mut rng);
-                let arrived = roll > loss_chance;
-                if arrived
-                {
-                    let roll = roll_dist.sample(&mut rng);
-                    let duplicated = roll < duplication_chance;
-                    if duplicated
-                    {
-                        let sent_date = gen_sent_date(lag, jitter_dist, &mut rng);
-                        let duplicate = Packet::new(buffer.clone(), dest, sent_date);
-                        let (q, cvar) = &*packet_queue_recv;
-                        let mut q = q.lock().unwrap();
-                        q.insert(sent_date, duplicate);
-                        cvar.notify_one();
-                    }
-
-                    let packet = Packet::new(buffer, dest, sent_date);
-
-                    let roll = roll_dist.sample(&mut rng);
-                    let unordered = roll < unorder_chance;
-                    if unordered && !unordered_packets.contains_key(&packet.dest)
-                    {
-                        //println!("Packet is gonna arrive after the next");
-                        unordered_packets.insert(packet.dest, packet);
-                    }
-                    else if let Some((_, prev_packet)) = unordered_packets.remove_entry(&packet.dest)
-                    {
-                        //println!("Packet queued after the next");
-                        let sent_date = packet.sent_date + gen_delay(lag, jitter_dist, &mut rng);
-                        let (q, cvar) = &*packet_queue_recv;
-                        let mut q = q.lock().unwrap();
-                        q.insert(packet.sent_date, prev_packet);
-                        q.insert(sent_date, packet);
-                        cvar.notify_one();
-                    }
-                    else
-                    {
-                        let (q, cvar) = &*packet_queue_recv;
-                        let mut q = q.lock().unwrap();
-                        q.insert(sent_date, packet);
-                        cvar.notify_one();
-                    }
-                }
-            }
-        }
-    });
-
-    loop
-    {
-        let now = now_nanos();
-
-        let (q, cvar) = &*packet_queue_send;
-        let queue_guard = q.lock().unwrap();
-        let (mut queue_guard, _) = cvar.wait_timeout(queue_guard, std::time::Duration::from_micros(10)).unwrap();
-
-        let mut to_send = queue_guard.split_off(&now);
-        swap(&mut to_send, &mut queue_guard);
-        for (_, packet) in to_send
-        {
-            //println!("Packet sent to {} of size {}", packet.dest, packet.size());
-            let guard = sending_sockets.lock().expect("Error on locking sending sockets");
-            let socket_send = guard.get(&packet.dest).expect(&format!("Did not find a key for {}", packet.dest));
-            socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
-        }
-    }
+    let proxy_addr = format!("0.0.0.0:{}", listen_port);
+    let proxy_addr = ToSocketAddrs::to_socket_addrs(&proxy_addr).expect("Could not convert addr").next().unwrap();
+    let server_addr = format!("127.0.0.1:{}", connect_port);
+    let server_addr = ToSocketAddrs::to_socket_addrs(&server_addr).expect("Could not convert addr").next().unwrap();
+    
+    let proxy = Proxy::new(proxy_addr, server_addr, conditions);
+    proxy.run();
 }
