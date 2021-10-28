@@ -38,11 +38,17 @@ impl Proxy{
         let queue = (Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new());
         self.packet_queues.insert(self.server_address, Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>::new(queue));
 
+        // Spawn Proxy -> Client thread
+        let server_queue = self.get_server_queue().clone();
+        let server_socket = self.server_socket.clone();
+        std::thread::spawn(move || {
+            loop{
+                Proxy::send_pending_packets(&server_queue, &server_socket);
+            }
+        });
+
+        // Spawn Client -> Proxy thread
         let server_address = self.server_address.clone();
-
-        self.server_socket.set_nonblocking(true).expect("Failed to set non blocking");
-
-        // Client -> Proxy
         loop{
             let mut buffer : Vec<u8> = vec![0; 255];
             let res = self.server_socket.recv_from(&mut buffer);
@@ -58,24 +64,6 @@ impl Proxy{
 
                 let dest = server_address;
                 self.queue_packet(buffer, src, dest);
-            }
-
-            // Proxy -> Client thread
-            let time = std::time::SystemTime::now();
-            let now = time.duration_since(std::time::UNIX_EPOCH).expect("Time is wrong");
-            let now = now.as_nanos();
-            
-            let queue = self.get_server_queue();
-            let (q, cvar) = &**queue;
-            let queue_guard = q.lock().unwrap();
-            let (mut queue_guard, _) = cvar.wait_timeout(queue_guard, std::time::Duration::from_micros(10)).unwrap();
-
-            let mut to_send = queue_guard.split_off(&now);
-            swap(&mut to_send, &mut queue_guard);
-            for (_, packet) in to_send
-            {
-                println!("Sending packet from proxy to client {}", packet.dest);
-                self.server_socket.send_to(&packet.buffer, packet.dest).expect("Error while sending");
             }
         }
     }
@@ -94,52 +82,61 @@ impl Proxy{
 
         // Crate client socket
         let client_socket = Arc::new(UdpSocket::bind(&client_socket_addr).expect(&format!("Could not bind to dynamic address {}", client_socket_addr)));
-        let client_socket_recv = client_socket.clone();
-        let client_socket_send = client_socket.clone();
         self.client_sockets.insert(client_address, client_socket.clone());
 
         // Create packet queue
         let queue = (Mutex::new(BTreeMap::<u128, Packet>::new()), Condvar::new());
         let queue = Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>::new(queue);
-        let queue_recv = self.get_server_queue().clone();
-        let queue_send = queue.clone();
-        self.packet_queues.insert(client_address, queue);
+        self.packet_queues.insert(client_address, queue.clone());
         
-        let conditions = self.network_conditions.clone();
-
         // Server -> Proxy Listening thread
+        let conditions = self.network_conditions.clone();
+        let queue_recv = self.get_server_queue().clone();
+        let client_socket_recv = client_socket.clone();
         let _handle = std::thread::spawn(move || {
             loop{
-                let mut buffer : Vec<u8> = vec![0; 255];
-                let res = client_socket_recv.recv_from(&mut buffer);
-                let (size, src) = res.expect("Recv from socket failed"); 
-                buffer.truncate(size);
-                
-                println!("Recv packet from server {} with destiny {}", src, client_address);
-                Proxy::queue_packet_static(&queue_recv, buffer, client_address, conditions);
+                Proxy::recv_inc_packets(&queue_recv, &client_socket_recv, client_address, conditions);
             }
         });
 
         // Proxy -> Server Listening thread
+        let queue_send = queue.clone();
+        let client_socket_send = client_socket.clone();
         let _handle = std::thread::spawn(move ||{
             loop{
-                let time = std::time::SystemTime::now();
-                let now = time.duration_since(std::time::UNIX_EPOCH).expect("Time is wrong");
-                let now = now.as_nanos();
-                
-                let (q, cvar) = &*queue_send;
-                let queue_guard = q.lock().unwrap();
-                let (mut queue_guard, _) = cvar.wait_timeout(queue_guard, std::time::Duration::from_micros(10)).unwrap();
-
-                let mut to_send = queue_guard.split_off(&now);
-                swap(&mut to_send, &mut queue_guard);
-                for (_, packet) in to_send
-                {
-                    println!("Sending packet from proxy socket {} to server {}", client_socket_addr, packet.dest);
-                    client_socket_send.send_to(&packet.buffer, packet.dest).expect("Error while sending");
-                }
+                Proxy::send_pending_packets(&queue_send, &client_socket_send);
             }
         });
+    }
+
+    fn recv_inc_packets(queue : &Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>, socket : &Arc<UdpSocket>, dest : SocketAddr, conditions : Conditions)
+    {
+        let mut buffer : Vec<u8> = vec![0; 255];
+        let res = socket.recv_from(&mut buffer);
+        let (size, src) = res.expect("Recv from socket failed"); 
+        buffer.truncate(size);
+        
+        //println!("Recv packet from server {} with destiny {}", src, dest);
+        Proxy::queue_packet_static(&queue, buffer, dest, conditions);
+    }
+
+    fn send_pending_packets(queue : &Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>, socket : &Arc<UdpSocket>)
+    {
+        let time = std::time::SystemTime::now();
+        let now = time.duration_since(std::time::UNIX_EPOCH).expect("Time is wrong");
+        let now = now.as_nanos();
+        
+        let (q, cvar) = &**queue;
+        let queue_guard = q.lock().unwrap();
+        let (mut queue_guard, _) = cvar.wait_timeout(queue_guard, std::time::Duration::from_micros(10)).unwrap();
+
+        let mut to_send = queue_guard.split_off(&now);
+        swap(&mut to_send, &mut queue_guard);
+        for (_, packet) in to_send
+        {
+            //println!("Sending packet from proxy socket {} to server {}", client_socket_addr, packet.dest);
+            socket.send_to(&packet.buffer, packet.dest).expect("Error while sending");
+        }
     }
 
     fn queue_packet(&mut self, buffer : Vec<u8>, src: SocketAddr, dest: SocketAddr)
