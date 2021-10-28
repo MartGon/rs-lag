@@ -55,6 +55,10 @@ fn main() {
     let server_addr = format!("127.0.0.1:{}", connect_port);
     let server_addr = ToSocketAddrs::to_socket_addrs(&server_addr).expect("Could not convert addr").next().unwrap();
     
-    let mut proxy = Proxy::new(proxy_addr, server_addr, conditions);
+    let mut client_proxy_cond = conditions.clone();
+    client_proxy_cond.loss_chance = 0f32;
+    
+    let server_proxy_cond = conditions;
+    let mut proxy = Proxy::new(proxy_addr, server_addr, client_proxy_cond, server_proxy_cond);
     proxy.run();
 }

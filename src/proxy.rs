@@ -14,12 +14,13 @@ pub struct Proxy{
     address : SocketAddr,
     server_address : SocketAddr,
 
-    network_conditions : Conditions,
+    client_proxy_conditions : Conditions,
+    server_proxy_conditions : Conditions
 }
 
 impl Proxy{
 
-    pub fn new(address : SocketAddr, server_address : SocketAddr, network_conditions : Conditions) -> Proxy{
+    pub fn new(address : SocketAddr, server_address : SocketAddr, client_proxy_conditions : Conditions, server_proxy_conditions : Conditions) -> Proxy{
         let packet_queues = HashMap::<SocketAddr, Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>>::new();
         let client_sockets = HashMap::<SocketAddr, Arc::<UdpSocket>>::new();
         Proxy{
@@ -28,7 +29,8 @@ impl Proxy{
             server_socket: Arc::new(UdpSocket::bind(address).expect(&format!("Could not bind to UDP {}", address))),
             address,
             server_address,
-            network_conditions
+            client_proxy_conditions,
+            server_proxy_conditions,
         }
     }
 
@@ -90,7 +92,7 @@ impl Proxy{
         self.packet_queues.insert(client_address, queue.clone());
         
         // Server -> Proxy Listening thread
-        let conditions = self.network_conditions.clone();
+        let conditions = self.server_proxy_conditions.clone();
         let queue_recv = self.get_server_queue().clone();
         let client_socket_recv = client_socket.clone();
         let _handle = std::thread::spawn(move || {
@@ -113,7 +115,7 @@ impl Proxy{
     {
         let mut buffer : Vec<u8> = vec![0; 255];
         let res = socket.recv_from(&mut buffer);
-        let (size, src) = res.expect("Recv from socket failed"); 
+        let (size, _src) = res.expect("Recv from socket failed"); 
         buffer.truncate(size);
         
         //println!("Recv packet from server {} with destiny {}", src, dest);
@@ -143,7 +145,7 @@ impl Proxy{
     {
         if let Some(packet_queue) = self.packet_queues.get(&src)
         {
-            Proxy::queue_packet_static(packet_queue, buffer, dest, self.network_conditions);
+            Proxy::queue_packet_static(packet_queue, buffer, dest, self.client_proxy_conditions);
         }
     }
 
