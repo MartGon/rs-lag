@@ -3,18 +3,18 @@ version: "0.1"
 author: MartGon
 about: UDP Proxy for network conditions simulation
 args:
-    - listen-port:
-        short: s
-        long: listen-port
-        help: UDP port to listen for connections
+    - bind-port:
+        short: b
+        long: bind-port
+        help: UDP port to bind for connections
         takes_value: true
         default_value: "8080"
-    - connect-port:
+    - connect-addr:
         short: c
-        long: connect-port
-        help: UDP port which datagrams will be redirected to.
+        long: connect-addr
+        help: UDP port which incoming to listening port datagrams will be redirected to.
         takes_value: true
-        default_value: "8081"
+        default_value: "127.0.0.1:8081"
     - lag:
         long: lag
         short: l
@@ -27,21 +27,41 @@ args:
         help: Amount of jitter in ms introduced by the network. This increases RTT on Uniform(-jitter, jitter)
         takes_value: true
         default_value: "5"
-    - duplication:
+    - client-server-duplication:
         short: d
-        long: duplication
-        help: Chance to duplicate a packet. A float value from 0 to 100
+        long: client-server-duplication
+        help: Chance to duplicate a packet on the way from the client to the server. A float value from 0 to 100
         default_value: "0"
-    - unorder:
+    - client-server-unorder:
         short: u
-        long: unorder
-        help: Chance for a given packet to arrive after the next. A float value from 0 to 100
+        long: client-server-unorder
+        help: Chance for a given packet to arrive after the next on the way from the client to the server. A float value from 0 to 100
         default_value: "0"
-    - loss:
+    - client-server-loss:
         short: m
-        long: loss
-        help: Chance for a packet to be lost. A float value from 0 to 100
+        long: client-server-loss
+        help: Chance for a packet to be lost on the way from the client to the server. A float value from 0 to 100
         default_value: "0"
+    - server-client-duplication:
+        short: D
+        long: server-client-duplication
+        help: Chance to duplicate a packet on the way from the server to the client. A float value from 0 to 100
+        default_value: "0"
+    - server-client-unorder:
+        short: U
+        long: server-client-unorder
+        help: Chance for a given packet to arrive after the next on the way from the server to the client. A float value from 0 to 100
+        default_value: "0"
+    - server-client-loss:
+        short: M
+        long: server-client-loss
+        help: Chance for a packet to be lost on the way from the server to the client. A float value from 0 to 100
+        default_value: "0"
+    - timeout:
+        short: t
+        long: timeout
+        help: Time in ms (int) to consider that a client disconnected
+        default_value: "5000"
 
 subcommands:
     - test:
