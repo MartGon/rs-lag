@@ -114,7 +114,7 @@ impl Proxy{
 
     fn recv_inc_packets(queue : &Arc::<(Mutex::<BTreeMap::<u128, Packet>>, Condvar)>, socket : &Arc<UdpSocket>, dest : SocketAddr, conditions : Conditions) -> bool
     {
-        let mut buffer : Vec<u8> = vec![0; 255];
+        let mut buffer : Vec<u8> = vec![0; 4096];
         let res = socket.recv_from(&mut buffer);
         let handled = res.is_ok();
         if let Some((size, _src)) = res.ok()
