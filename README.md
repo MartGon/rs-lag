@@ -2,7 +2,9 @@
 
 ## Description
 
-This program works as an UDP proxy to simulate network conditions. Different network parameters, such as RTT, jitter, packet loss, packet duplication and packtet unordering can be configured through its command line interface. 
+This program works as an UDP proxy to simulate network conditions. Different network parameters, such as RTT, jitter, packet loss, packet duplication and packet unordering can be configured through its command line interface.
+
+# ![rs-lag.png](https://raw.githubusercontent.com/MartGon/rs-lag/main/docs/pictures/rs-lag.png)
 
 ## How to use
 
